@@ -334,8 +334,8 @@ void Tester::execute() {
     if (peLaunchesKernel()) {
       memset(timer, 0, sizeof(uint64_t) * args.num_wgs);
 
-      const dim3 blockSize(args.wg_size, 1, 1);
-      const dim3 gridSize(args.num_wgs, 1, 1);
+      const dim3 blockSize(args.wg_size, 1, 1); // wg_size是线程数
+      const dim3 gridSize(args.num_wgs, 1, 1);//work group即block，wg数
 
       CHECK_HIP(hipEventRecord(start_event, stream));
 

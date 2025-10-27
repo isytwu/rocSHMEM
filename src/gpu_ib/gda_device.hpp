@@ -127,7 +127,7 @@ class GDADevice {
   class QPInitAttr {
    public:
     explicit QPInitAttr(ibv_qp_cap cap) {
-      attr.cap = cap;
+      attr.cap = cap; // cap是结构体，包含max_send_wr也就是sq_size
       attr.sq_sig_all = 0;
     }
     ibv_qp_init_attr_ex attr{};

@@ -28,7 +28,7 @@
 namespace rocshmem {
 
 __device__ SegmentBuilder::SegmentBuilder(uint64_t wqe_idx, void *base) {
-  mlx5_segment *base_ptr = static_cast<mlx5_segment*>(base);
+  mlx5_segment *base_ptr = static_cast<mlx5_segment*>(base);//mlx5_segment是一个union，表示4个字段
   size_t segment_offset = wqe_idx * SEGMENTS_PER_WQE;
   segp = &base_ptr[segment_offset];
 }
@@ -70,9 +70,9 @@ __device__ SegmentBuilder::SegmentBuilder(uint64_t wqe_idx, void *base) {
  */
 __device__ void SegmentBuilder::update_ctrl_seg(uint16_t pi, uint8_t opcode, uint8_t opmod, uint32_t qp_num, uint8_t fm_ce_se, uint8_t ds, uint8_t signature, uint32_t imm) {
   segp->ctrl_seg = {0};
-  swap_endian_store(&segp->ctrl_seg.opmod_idx_opcode, ((uint32_t)opmod << 24) | ((uint32_t)pi << 8) | opcode);
-  swap_endian_store(&segp->ctrl_seg.qpn_ds, qp_num << 8 | ds);
-  segp->ctrl_seg.fm_ce_se = fm_ce_se;
+  swap_endian_store(&segp->ctrl_seg.opmod_idx_opcode, ((uint32_t)opmod << 24) | ((uint32_t)pi << 8) | opcode);// 从高到低 8b opmod | 16b pi | 8b opcode
+  swap_endian_store(&segp->ctrl_seg.qpn_ds, qp_num << 8 | ds);//队列号 ds（data segment size）是WQE长度（单位是16字节字段，传入3表示有48字节，表示包含2个字段）
+  segp->ctrl_seg.fm_ce_se = fm_ce_se;                         // fm-fence mode（前面WQE执行完再执行本WQE）；CE (Completion & Event)：控制本 WQE 是否需要在 CQ（Completion Queue）中生成完成事件（completion entry），以及是否需要通知 host 发生事件。SE (Solicited Event)：指定本 WQE 是否需要生成“Solicited Event”，即通知远端或 host 发生了特殊事件（如 RDMA send with solicited event）。
   segp->ctrl_seg.signature = signature;
   segp->ctrl_seg.imm = imm;
   segp++;

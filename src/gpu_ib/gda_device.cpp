@@ -408,7 +408,7 @@ GDADevice::~GDADevice() {
     free (requested_dev);
 }
 
-__device__ bool GDADevice::create_ctx(rocshmem_ctx_t *ctx) {
+__device__ bool GDADevice::create_ctx(rocshmem_ctx_t *ctx) {//
   GPUIBContext *ctx_;
   auto pop_result = ctx_free_list.get()->pop_front();
   if (!pop_result.success) {
@@ -702,7 +702,7 @@ void GDADevice::initialize_context(GPUIBContext *ctx, int context_id) {
   CHECK_HIP(hipMemset(ctx->qps, 0, sizeof(QueuePair) * num_pes));
   for (int i{0}; i < num_pes; i++) {
     int offset = num_pes * context_id + i;
-    CHECK_HIP(hipMemcpy(&ctx->qps[i], &gpu_qps[offset], sizeof(QueuePair), hipMemcpyDefault));
+    CHECK_HIP(hipMemcpy(&ctx->qps[i], &gpu_qps[offset], sizeof(QueuePair), hipMemcpyDefault)); // gpu_qps是在
     ctx->qps[i].base_heap = ctx->base_heap;
   }
 }
@@ -796,9 +796,9 @@ void GDADevice::create_qps(uint8_t port, ibv_port_attr* ib_port_att) {
   // TODO allow zero sges in the driver
   cap.max_recv_sge = 1;
 #endif
-  QPInitAttr qp_init_attr{qpattr(cap)};
+  QPInitAttr qp_init_attr{qpattr(cap)};//cap是结构体
   cqs.resize((maximum_num_contexts_ + 1) * num_pes);
-  qps.resize((maximum_num_contexts_ + 1) * num_pes);
+  qps.resize((maximum_num_contexts_ + 1) * num_pes); // std::vector<ibv_qp*> qps;
   int max_num_cqe = qp_init_attr.attr.cap.max_send_wr;
   for (int i{0}; i < qps.size(); i++) {
 #ifdef GPUIB_IONIC
@@ -917,7 +917,7 @@ void GDADevice::initialize_gpu_qp(QueuePair* gpu_qp, int conn_num) {
   mlx5dv_qp qp_out;
   mlx_obj.qp.in = qps[conn_num];
   mlx_obj.qp.out = &qp_out;
-  mlx5dv_init_obj(&mlx_obj, MLX5DV_OBJ_QP);
+  mlx5dv_init_obj(&mlx_obj, MLX5DV_OBJ_QP);//输出的很多东西还在host上？
   dump_mlx5dv_qp(&qp_out, conn_num);
 
   /*
@@ -947,16 +947,16 @@ void GDADevice::initialize_gpu_qp(QueuePair* gpu_qp, int conn_num) {
    * };
    */
 
-  gpu_qp->dbrec = &qp_out.dbrec[1]; // points to two pointers: 0 -> MLX5_REC_DBR, 1 -> MLX5_SND_DBR
-  gpu_qp->sq_buf = reinterpret_cast<uint64_t*>(qp_out.sq.buf);
+  gpu_qp->dbrec = &qp_out.dbrec[1]; // points to two pointers: 0 -> MLX5_REC_DBR, 1 -> MLX5_SND_DBR收和发
+  gpu_qp->sq_buf = reinterpret_cast<uint64_t*>(qp_out.sq.buf);//TODO 还是host buffer？
   gpu_qp->sq_wqe_cnt = qp_out.sq.wqe_cnt;
   gpu_qp->rkey = htobe32(heap_rkey[conn_num % num_pes]);
   gpu_qp->lkey = htobe32(heap_mr->lkey);
   gpu_qp->qp_num = qps[conn_num]->qp_num;
-  // The 2 in qp_out.bf.size * 2 below facilitates the switching between blue flame registers
+  // The 2 in qp_out.bf.size * 2 below facilitates the switching between blue flame registers MLX5 驱动的 blue flame（BF）寄存器区通常有两个寄存器（双寄存器），用于支持“切换”或“轮转”doorbell写入（比如多线程/多流并发时，避免写冲突或提升性能），位于网卡的 UAR（User Access Region）空间。
   void* gpu_ptr{nullptr};
-  rocm_memory_lock_to_fine_grain(qp_out.bf.reg, qp_out.bf.size * 2, &gpu_ptr, hip_dev_id);
-  gpu_qp->db.ptr = reinterpret_cast<uint64_t*>(gpu_ptr);
+  rocm_memory_lock_to_fine_grain(qp_out.bf.reg, qp_out.bf.size * 2, &gpu_ptr, hip_dev_id); // 第一个参数是host ptr,把两个 BF 寄存器都映射到 GPU 侧，保证无论硬件/驱动如何切换，都能被 GPU 访问。
+  gpu_qp->db.ptr = reinterpret_cast<uint64_t*>(gpu_ptr);//看起来还是64bit
 #endif // !GPUIB_IONIC
 }
 
@@ -969,7 +969,7 @@ ibv_qp* GDADevice::create_qp(ibv_pd* pd, ibv_context* context, ibv_qp_init_attr_
   qp_attr->recv_cq = cq;
   qp_attr->pd = pd;
   qp_attr->comp_mask = IBV_QP_INIT_ATTR_PD;
-  qp = ibv_create_qp_ex(context, qp_attr);
+  qp = ibv_create_qp_ex(context, qp_attr);//ex是extended，支持更多高级参数
   GPUIB_CHECK_NNULL(qp, "ibv_create_qp_ex");
   return qp;
 }

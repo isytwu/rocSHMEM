@@ -35,7 +35,7 @@ GPUIBContext::GPUIBContext(GDADevice *device, int idx)
     : Context(device) {
   base_heap = device->heap.get_heap_bases().data();
   barrier_sync = device->barrier_sync;
-  device->initialize_context(this, idx);
+  device->initialize_context(this, idx);//
   barrier_sync = device->barrier_sync;
 }
 
@@ -52,11 +52,11 @@ __device__ void *GPUIBContext::shmem_ptr(const void *dest, int pe) {
 __device__ void GPUIBContext::putmem(void *dest, const void *source, size_t nelems, int pe) {
   uint64_t L_offset = reinterpret_cast<char*>(dest) - base_heap[my_pe];
   bool need_turn {true};
-  uint64_t turns = __ballot(need_turn);
+  uint64_t turns = __ballot(need_turn);//收集所有线程的need_turn值，此时turn为64个1
   while (turns) {
-    uint8_t lane = __ffsll((unsigned long long)turns) - 1;
-    int pe_turn = __shfl(pe, lane);
-    if (pe_turn == pe) {
+    uint8_t lane = __ffsll((unsigned long long)turns) - 1; // 0b0010会返回2，就是找低位1
+    int pe_turn = __shfl(pe, lane);//一般第一轮lane0被选中，把自己的pe广播出去，作为这一轮选中的pe_turn
+    if (pe_turn == pe) {//传入pe是否=这轮被选中的pe_turn
       qps[pe].put_nbi(base_heap[pe] + L_offset, source, nelems, pe);
       qps[pe].quiet();
       need_turn = false;
@@ -65,7 +65,7 @@ __device__ void GPUIBContext::putmem(void *dest, const void *source, size_t nele
   }
 }
 
-__device__ void GPUIBContext::putmem_nbi(void *dest, const void *source, size_t nelems, int pe) {
+__device__ void GPUIBContext::putmem_nbi(void *dest, const void *source, size_t nelems, int pe) {//non-blocking immediate
   uint64_t L_offset = reinterpret_cast<char*>(dest) - base_heap[my_pe];
   bool need_turn {true};
   uint64_t turns = __ballot(need_turn);

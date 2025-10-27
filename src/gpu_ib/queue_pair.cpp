@@ -244,13 +244,13 @@ __device__ void QueuePair::ring_doorbell(uint32_t pos) {
 }
 #else // !GPUIB_IONIC
 __device__ void QueuePair::ring_doorbell(uint64_t db_val, uint64_t my_sq_counter) {
-  swap_endian_store(const_cast<uint32_t*>(dbrec), (uint32_t)my_sq_counter);
-  __atomic_signal_fence(__ATOMIC_SEQ_CST);
+  swap_endian_store(const_cast<uint32_t*>(dbrec), (uint32_t)my_sq_counter);//告诉NIC，队列中从旧的队列尾部到这个新的索引之间的所有WQE都是新提交的、需要处理的。另外，这是持续递增的值，没有取模
+  __atomic_signal_fence(__ATOMIC_SEQ_CST);//插入一个编译器层面的强序 fence，保证前面的内存写入（doorbell record）不会被编译器重排到后面。
 
-  __hip_atomic_store(db.ptr, db_val, __ATOMIC_SEQ_CST, __HIP_MEMORY_SCOPE_SYSTEM);
-  uint64_t db_uint = __hip_atomic_load(&db.uint, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
-  db_uint ^= 0x100;
-  __hip_atomic_store(&db.uint, db_uint, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+  __hip_atomic_store(db.ptr, db_val, __ATOMIC_SEQ_CST, __HIP_MEMORY_SCOPE_SYSTEM);//db_val是最后一个WQE的字段
+  uint64_t db_uint = __hip_atomic_load(&db.uint, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT); // 以 relaxed 顺序读取 doorbell 寄存器的当前值。
+  db_uint ^= 0x100;//0x100=0b1 0000 0000，这里把第9个bit 翻转了，TODO 为什么？uint和ptr是union
+  __hip_atomic_store(&db.uint, db_uint, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT); // db_val是wqe的数值，不会影响到sq_buf里WQE的值，只是改doorbell寄存器
 }
 #endif // !GPUIB_IONIC
 #endif // !GPUIB_BNXT
@@ -262,9 +262,9 @@ __device__ void QueuePair::quiet() {
 }
 #else // !GPUIB_IONIC
 __device__ void QueuePair::quiet() {
-  constexpr size_t BROADCAST_SIZE = 1024 / __AMDGCN_WAVEFRONT_SIZE;
+  constexpr size_t BROADCAST_SIZE = 1024 / __AMDGCN_WAVEFRONT_SIZE; // 假设最大1024 thr（16 warp）？BROADCAST_SIZE相当于是最大的warp数
   __shared__ uint64_t wqe_broadcast[BROADCAST_SIZE];
-  uint8_t wavefront_id = get_flat_block_id() / __AMDGCN_WAVEFRONT_SIZE;
+  uint8_t wavefront_id = get_flat_block_id() / __AMDGCN_WAVEFRONT_SIZE;//get_flat_block_id返回的是thr id；wavefront_id是block内的warp id
   wqe_broadcast[wavefront_id] = 0;
 
   uint64_t activemask = get_active_lane_mask();
@@ -279,20 +279,20 @@ __device__ void QueuePair::quiet() {
     uint64_t wave_cq_consumer{0};
     while (!done) {
       uint64_t active = __hip_atomic_load(&quiet_active, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
-      uint64_t posted = __hip_atomic_load(&quiet_posted, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+      uint64_t posted = __hip_atomic_load(&quiet_posted, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT); // quiet_posted表示成功ring DB的wqe个数
       uint64_t completed = __hip_atomic_load(&quiet_completed, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
       if (!(posted - completed)) {
-        return;
+        return;//这里说明别的线程进来可能poll了cqe
       }
       int64_t quiet_val = posted - active;
       if (quiet_val <= 0) {
         continue;
       }
-      quiet_amount = min(num_active_lanes, quiet_val);
+      quiet_amount = min(num_active_lanes, quiet_val);//quiet实际个数
       if (is_leader) {
-        done = __hip_atomic_compare_exchange_strong(&quiet_active, &active, active + quiet_amount, __ATOMIC_RELAXED, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+        done = __hip_atomic_compare_exchange_strong(&quiet_active, &active, active + quiet_amount, __ATOMIC_RELAXED, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT); // 返回的bool，而不是old value；另外还有个区别：如果不相等，则将 *expected 更新为 *addr 的当前值，返回 false；；；多个warp的leader在CAS抢quiet_active的推进权
         if (done) {
-          wave_cq_consumer = __hip_atomic_fetch_add(&cq_consumer, quiet_amount, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+          wave_cq_consumer = __hip_atomic_fetch_add(&cq_consumer, quiet_amount, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT); // 注意有fetch是返回旧值，注意这里的数值依然有可能和quiet_active不同，线程快慢的问题，可能thrA在293和295之间别的线程B先进来更新，这里才是实际的warp在CQE上取号
         }
       }
       done = __shfl(done, leader_phys_lane_id);
@@ -305,15 +305,15 @@ __device__ void QueuePair::quiet() {
       volatile mlx5_cqe64 *cqe_entry = &cq_buf[my_cq_index];
       uint16_t be_wqe_counter{0};
       uint8_t op_own{0};
-      uint8_t owner_bit = (my_cq_consumer >> cq_log_cnt) & 1;
+      uint8_t owner_bit = (my_cq_consumer >> cq_log_cnt) & 1; // 应该等同my_cq_consumer/cq_cnt
       bool vote_failed{true};
 
-      while (vote_failed) {
+      while (vote_failed) {//整个warp去poll cqe
         op_own = *((volatile uint8_t*)&cqe_entry->op_own);
         bool my_ownership_vote = (op_own & 1) == owner_bit;
         bool my_opcode_vote = (op_own >> 4) != MLX5_CQE_INVALID;
         uint64_t votes = __ballot(my_ownership_vote && my_opcode_vote);
-        vote_failed = __popcll(votes) < quiet_amount;
+        vote_failed = __popcll(votes) < quiet_amount;//等待warp的所有thr都poll到
         if (!vote_failed) {
           be_wqe_counter = *((volatile uint16_t*)&cqe_entry->wqe_counter);
         }
@@ -321,9 +321,9 @@ __device__ void QueuePair::quiet() {
 
       uint16_t wqe_counter;
       swap_endian_store(const_cast<uint16_t*>(&wqe_counter), reinterpret_cast<uint16_t>(be_wqe_counter));
-      uint64_t wqe_id =  outstanding_wqes[wqe_counter];
-      __hip_atomic_fetch_max(&wqe_broadcast[wavefront_id], wqe_id, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_WORKGROUP);
-      uint8_t mlx5_invld_bits = MLX5_CQE_INVALID << 4 | owner_bit;
+      uint64_t wqe_id = outstanding_wqes[wqe_counter]; // post wqe的时候存入了 my_sq_counter。这里是不是说明硬件返回的是%OUTSTANDING_TABLE_SIZE的值
+      __hip_atomic_fetch_max(&wqe_broadcast[wavefront_id], wqe_id, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_WORKGROUP); // 拿到warp里最大的wqe_id
+      uint8_t mlx5_invld_bits = MLX5_CQE_INVALID << 4 | owner_bit; // owner_bit不变
       *((volatile uint8_t*)&cqe_entry->op_own) = mlx5_invld_bits;
       __atomic_signal_fence(__ATOMIC_SEQ_CST);
     }
@@ -331,14 +331,14 @@ __device__ void QueuePair::quiet() {
       uint64_t completed {0};
       do {
         completed = __hip_atomic_load(&quiet_completed, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
-      } while (completed != wave_cq_consumer);
+      } while (completed != wave_cq_consumer);//这里也是等待前面的先ringDB，和437行类似，严格按照CQE idx顺序去ringDB
 
-      swap_endian_store(const_cast<uint32_t*>(cq_dbrec), (uint32_t)(wave_cq_consumer + quiet_amount));
+      swap_endian_store(const_cast<uint32_t*>(cq_dbrec), (uint32_t)(wave_cq_consumer + quiet_amount));//UpdateCqDbrRecord?
       __atomic_signal_fence(__ATOMIC_SEQ_CST);
 
-      uint64_t sunk_wqe_id = wqe_broadcast[wavefront_id];
+      uint64_t sunk_wqe_id = wqe_broadcast[wavefront_id]; // warp里最大的wqe_id
       __hip_atomic_fetch_max(&sq_sunk, sunk_wqe_id, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
-      __hip_atomic_fetch_add(&quiet_completed, quiet_amount, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+      __hip_atomic_fetch_add(&quiet_completed, quiet_amount, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT); // sq_sunk是wqe idx，比如poll到第一个CQE之后，sq_sunk=0， quiet_completed=1
     }
   }
 }
@@ -346,7 +346,7 @@ __device__ void QueuePair::quiet() {
 #endif // !GPUIB_BNXT
 
 #ifndef GPUIB_BNXT
-#ifdef GPUIB_IONIC
+#ifdef GPUIB_IONIC//IONIC 是 Pensando 公司推出的智能网络适配器（SmartNIC）品牌，支持高性能 RDMA、加速网络和存储等功能。
 __device__ void QueuePair::post_wqe_rma(int pe, int32_t size, uintptr_t *laddr, uintptr_t *raddr, uint8_t opcode) {
   uint64_t activemask = get_same_qp_lane_mask();
   uint32_t num_wqes = get_active_lane_count(activemask);
@@ -397,11 +397,11 @@ __device__ void QueuePair::post_wqe_rma(int pe, int32_t size, uintptr_t *laddr, 
   uint8_t my_logical_lane_id = get_active_lane_num(activemask);
   bool is_leader{my_logical_lane_id == 0};
   const uint64_t leader_phys_lane_id = get_first_active_lane_id(activemask);
-  uint8_t num_wqes{num_active_lanes};
+  uint8_t num_wqes{num_active_lanes};//每个thr处理一个wqe
   uint64_t wave_sq_counter{0};
 
   if (is_leader) {
-    wave_sq_counter = __hip_atomic_fetch_add(&sq_posted, num_wqes, __ATOMIC_SEQ_CST, __HIP_MEMORY_SCOPE_AGENT);
+    wave_sq_counter = __hip_atomic_fetch_add(&sq_posted, num_wqes, __ATOMIC_SEQ_CST, __HIP_MEMORY_SCOPE_AGENT);//返回的是old value
   }
   wave_sq_counter = __shfl(wave_sq_counter, leader_phys_lane_id);
   uint64_t my_sq_counter = wave_sq_counter + my_logical_lane_id;
@@ -410,34 +410,34 @@ __device__ void QueuePair::post_wqe_rma(int pe, int32_t size, uintptr_t *laddr, 
   while (true) {
     uint64_t db_touched = __hip_atomic_load(&sq_db_touched, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
     uint64_t sunk = __hip_atomic_load(&sq_sunk, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
-    int64_t num_active_sq_entries = db_touched - sunk;
-    if (num_active_sq_entries < 0) {
+    int64_t num_active_sq_entries = db_touched - sunk; // 当前队列中还未完成的 WQE 数量；sunk是index！相当于db_touched-quiet_completed+1，多了1，相对应的num_free_entries少了1
+    if (num_active_sq_entries < 0) {//TODO 啥时候会是负数
       continue;
     }
-    uint64_t num_free_entries = min(sq_wqe_cnt, cq_cnt) - num_active_sq_entries;
-    uint64_t num_entries_until_wave_last_entry = wave_sq_counter + num_active_lanes - db_touched;
-    if (num_free_entries > num_entries_until_wave_last_entry) {
+    uint64_t num_free_entries = min(sq_wqe_cnt, cq_cnt) - num_active_sq_entries;//SQ上剩余可用条目数
+    uint64_t num_entries_until_wave_last_entry = wave_sq_counter + num_active_lanes - db_touched; // 总共要post的 - touched;本 wavefront 最后一个条目距离 doorbell 的距离
+    if (num_free_entries > num_entries_until_wave_last_entry) {//num_free_entries少1，应该num_free_entries+1 >= num_entries_until_wave_last_entry,更严格了
       break;
     }
     quiet();
   }
 
   outstanding_wqes[my_sq_counter % OUTSTANDING_TABLE_SIZE] = my_sq_counter;
-
-  SegmentBuilder seg_build(my_sq_index, sq_buf);
+  //这里每个wqe都会新填写字段
+  SegmentBuilder seg_build(my_sq_index, sq_buf); // wqe_idx和 base；取sq_buf对应my_sq_index的那段
   seg_build.update_ctrl_seg(my_sq_counter, opcode, 0, qp_num, MLX5_WQE_CTRL_CQ_UPDATE, 3, 0, 0);
   seg_build.update_raddr_seg(raddr, rkey);
   seg_build.update_data_seg(laddr, size, lkey);
-  __atomic_signal_fence(__ATOMIC_SEQ_CST);
+  __atomic_signal_fence(__ATOMIC_SEQ_CST); // 与 __atomic_thread_fence 不同，__atomic_signal_fence 只在编译器层面生效，不会插入硬件指令。告诉编译器，不能把 fence 前后的内存操作重排，必须保持原有顺序。__ATOMIC_SEQ_CST强内存序
 
-  if (is_leader) {
+  if (is_leader) {//这里没有显式barrier，因为warp是lock step的
     uint64_t db_touched {0};
     do {
       db_touched = __hip_atomic_load(&sq_db_touched, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
-    } while (db_touched != wave_sq_counter);
+    } while (db_touched != wave_sq_counter);//确保之前的已经正确提交到硬件，这里保证了ring DB的次序，同时有多个warp要post的时候，ring DB是按WQE的顺序的，先提出post的先touch DB，同样下面444行用store也能保证sq_db_touched递增
 
     uint8_t *base_ptr = reinterpret_cast<uint8_t*>(sq_buf);
-    uint64_t* ctrl_wqe_8B_for_db = reinterpret_cast<uint64_t*>(&base_ptr[64 * ((wave_sq_counter + num_wqes - 1) % sq_wqe_cnt)]);
+    uint64_t* ctrl_wqe_8B_for_db = reinterpret_cast<uint64_t*>(&base_ptr[64 * ((wave_sq_counter + num_wqes - 1) % sq_wqe_cnt)]);//WQE64字节，这里是指向最后一个WQE
     ring_doorbell(*ctrl_wqe_8B_for_db, wave_sq_counter + num_wqes);
 
     __hip_atomic_fetch_add(&quiet_posted, num_wqes, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
@@ -605,7 +605,7 @@ __device__ uint64_t QueuePair::post_wqe_amo(int pe, int32_t size, uintptr_t *rad
 __device__ void QueuePair::put_nbi(void *dest, const void *source, size_t nelems, int pe) {
   uintptr_t *src = reinterpret_cast<uintptr_t*>(const_cast<void*>(source));
   uintptr_t *dst = reinterpret_cast<uintptr_t*>(dest);
-  post_wqe_rma(pe, nelems, src, dst, GPUIB_OP_RDMA_WRITE);
+  post_wqe_rma(pe, nelems, src, dst, GPUIB_OP_RDMA_WRITE);//
 }
 
 __device__ int64_t QueuePair::atomic_fetch(void *dest, int64_t atomic_data, int64_t atomic_cmp, int pe, uint8_t atomic_op) {

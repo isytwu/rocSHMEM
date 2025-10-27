@@ -138,7 +138,7 @@ Context *get_internal_ctx(rocshmem_ctx_t ctx) {
 }
 
 __device__
-int rocshmem_wg_ctx_create(rocshmem_ctx_t *ctx) {
+int rocshmem_wg_ctx_create(rocshmem_ctx_t *ctx) {//实现
   bool result{true};
   if (get_flat_block_id() == 0) {
     ctx->team_opaque = reinterpret_cast<TeamInfo*>(ROCSHMEM_CTX_DEFAULT.team_opaque);

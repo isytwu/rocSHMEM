@@ -56,7 +56,7 @@ __global__ void RandomAccessTest(int loop, int skip, long long int *start_time,
                                  uint32_t *threads_bins, uint32_t *off_bins,
                                  uint32_t *PE_bins, ShmemContextType ctx_type) {
   __shared__ rocshmem_ctx_t ctx;
-  int wg_id = get_flat_grid_id();
+  int wg_id = get_flat_grid_id();//block id
   rocshmem_wg_ctx_create(&ctx);
 
   int pe = rocshmem_ctx_my_pe(ctx);
@@ -69,12 +69,12 @@ __global__ void RandomAccessTest(int loop, int skip, long long int *start_time,
     r_buf = r_buf + offset;
 
     for (int i = 0; i < loop + skip; i++) {
-      if (i == skip) {
+      if (i == skip) {//前skip轮不计时
         start_time[wg_id] = wall_clock64();
       }
       switch (type) {
         case PutType:
-          rocshmem_ctx_putmem(ctx, (char *)r_buf, (char *)s_buf, size, PE);
+          rocshmem_ctx_putmem(ctx, (char *)r_buf, (char *)s_buf, size, PE);//
           break;
         default:
           break;

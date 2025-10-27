@@ -112,7 +112,7 @@ void AMOStandardTester<T>::verifyResults(uint64_t size) {
   __global__ void AMOStandardTest<T>(int loop, int skip, long long int *start_time, long long int *end_time, char *r_buf, \
 		                     T *s_buf, T *ret_val, TestType type, ShmemContextType ctx_type) {                    \
     __shared__ rocshmem_ctx_t ctx;                                                                                        \
-    rocshmem_wg_ctx_create(&ctx);                                                                                         \
+    rocshmem_wg_ctx_create(&ctx);/*ctx包了一系列实现的函数*/                                                                                         \
     __shared__ long long int wf_start_time[16];                                                                           \
     __shared__ long long int wf_ret_val[16];                                                                              \
     int wg_id = get_flat_grid_id();                                                                                       \
@@ -140,7 +140,7 @@ void AMOStandardTester<T>::verifyResults(uint64_t size) {
         default:                                                                                                          \
           break;                                                                                                          \
       }                                                                                                                   \
-      rocshmem_ctx_quiet(ctx);                                                                                            \
+      rocshmem_ctx_quiet(ctx);/*quiet*/                                                                                            \
       end_time[wg_id] = wall_clock64();                                                                                   \
       __hip_atomic_fetch_max(&wf_ret_val[wf_id], ret, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_WORKGROUP);                    \
     }                                                                                                                     \
